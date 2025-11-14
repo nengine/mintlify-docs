@@ -1,0 +1,748 @@
+---
+title: Hub-and-Spoke Agent Architecture SOP
+description: Standard operating procedure for implementing hub-and-spoke agent architecture with stateless specialists
+---
+
+## Executive Summary
+
+This document captures the complete journey of implementing Hub-and-Spoke agent architecture in the ADK framework, including all issues encountered, solutions applied, and a Standard Operating Procedure (SOP) to avoid repeating these mistakes.
+
+---
+
+## Part 1: Problem Summary
+
+### Goal
+
+Implement a Hub-and-Spoke architecture where:
+
+- Hub: Main `un_policy_agent` with SmartCoordinator for deterministic routing
+- Spokes: Four specialist agents (Salary, Leave, Travel, Benefits) wrapped as `AgentTool` instances
+- Pattern: Use `before_agent_callback` to intercept user queries, route to specialists, and return formatted responses
+
+### The Challenge
+
+Calling a specialist `AgentTool` from within a `before_agent_callback` is non-trivial because:
+
+1. `AgentTool` expects async execution (`run_async()`).
+2. The callback runs in the main ADK event loop.
+3. The callback must return `types.Content` (not `LlmResponse`).
+4. Specialists return JSON with structured data plus formatted responses.
+5. All coordination must be stateless (no session persistence).
+
+---
+
+## Part 2: Issues Encountered and Solutions
+
+### Issue 1: SmartCoordinator Not Loading
+
+**Symptom**: Logs showed SmartCoordinator not loaded; falling back to LLM routing.
+
+**Root Cause**: Import chain failures in `coordinator.py`, `coordinator_classifier.py`, `observability.py`:
+
+- Direct imports like `import coordinator_config` failed in package context.
+- When `observability.py` tried `from coordinator import EventLog`, it created a circular import.
+
+**Solution Applied**: Three-tier import fallback strategy.
+
+```python
+try:
+    from .coordinator_config import CoordinatorConfig
+except ImportError:
+    try:
+        from coordinator_config import CoordinatorConfig
+    except ImportError:
+        import importlib.util
+        import os
+
+        spec = importlib.util.spec_from_file_location(
+            "coordinator_config",
+            os.path.join(os.path.dirname(__file__), "coordinator_config.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        CoordinatorConfig = module.CoordinatorConfig
+
+**Files Fixed**:
+
+- `coordinator.py`
+- `coordinator_classifier.py`
+- `intent_classifier.py`
+- `observability.py`
+
+---
+
+### Issue 2: Asyncio Event Loop Conflict
+
+**Symptom**: `RuntimeError: asyncio.run() cannot be called from a running event loop`
+
+**Root Cause**: The ADK framework already has an active event loop running. Calling `asyncio.run()` inside a callback running within that loop creates a nested event loop.
+
+**Solution Applied**: Use `nest_asyncio` to allow nested event loops.
+
+```python
+import asyncio
+
+try:
+    loop = asyncio.get_running_loop()
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    specialist_result = asyncio.run(
+        specialist_tool.run_async(args=specialist_args, tool_context=tool_ctx)
+    )
+except RuntimeError:
+    # No running loop; safe to call asyncio.run directly
+    specialist_result = asyncio.run(
+        specialist_tool.run_async(args=specialist_args, tool_context=tool_ctx)
+    )
+```
+
+**Key Learning**: Nested async contexts are common in framework callbacks. Always handle both cases:
+
+- Inside running loop – use `nest_asyncio`.
+- Outside loop – call `asyncio.run()` normally.
+
+---
+
+### Issue 3: Incorrect Tool Invocation Method
+
+**Symptom**: `AttributeError: 'AgentTool' object has no attribute 'run'`
+
+**Root Cause**: Assumed `AgentTool` had a `.run()` method like some other ADK tools. It does not.
+
+**Correct Method**: `AgentTool.run_async()`.
+
+```python
+# WRONG
+result = specialist_tool.run(args=specialist_args)
+
+# CORRECT
+result = await specialist_tool.run_async(args=specialist_args, tool_context=tool_ctx)
+```
+
+**Key Learning**: Always check ADK tool signatures. `AgentTool` specifically requires:
+
+- `run_async()` – async method (returns coroutine).
+- `args` parameter – dict of arguments to pass to the agent.
+- `tool_context` parameter – `ToolContext` object with invocation info.
+
+---
+
+### Issue 4: Missing ToolContext Parameter
+
+**Symptom**: `TypeError: run_async() missing required argument: 'tool_context'`
+
+**Root Cause**: `ToolContext` was not being passed. Initially tried to access `callback_context.invocation_context` (does not exist as public attribute).
+
+**Solution Applied**: Use private attribute `_invocation_context`.
+
+```python
+from google.adk.tools.tool_context import ToolContext
+
+# Extract invocation context from callback
+tool_ctx = ToolContext(invocation_context=callback_context._invocation_context)
+
+# Pass to run_async
+specialist_result = await specialist_tool.run_async(
+    args=specialist_args,
+    tool_context=tool_ctx,
+)
+```
+
+**Key Learning**: Always check ADK documentation for private vs public attributes. When `invocation_context` is needed, it is available as `_invocation_context` on the callback context.
+
+---
+
+### Issue 5: Specialist Argument Format Mismatch
+
+**Symptom**: `KeyError: 'request'`
+
+**Root Cause**: The specialist agent expects a specific request format but was receiving a raw coordinator payload dict.
+
+**Solution Applied**: Build `specialist_request` with coordinator context plus user query.
+
+```python
+def build_specialist_request(payload: dict) -> str:
+    """
+    Create the full specialist request including coordinator context and
+    the user's original query.
+    """
+    system_message = build_specialist_system_message(payload)
+    user_query = payload["user_query"]
+
+    parts = [
+        system_message,
+        "",
+        "---",
+        "",
+        f"User's original query: {user_query}",
+    ]
+    return "\n".join(parts)
+
+
+specialist_request = build_specialist_request(decision.payload)
+
+specialist_args = {"request": specialist_request}
+
+specialist_result = await specialist_tool.run_async(
+    args=specialist_args,
+    tool_context=tool_ctx,
+)
+```
+
+**Key Learning**: Each specialist expects a specific input format defined in its instruction contract. The `request` parameter should include:
+
+1. System message with coordinator context (intent, entities, confidence scores).
+2. User's original query.
+3. Structured as a single string `request` parameter.
+
+---
+
+### Issue 6: Wrong Callback Return Type
+
+**Symptom**: Response not appearing in ADK web UI.
+
+**Root Cause**: Returned `LlmResponse` instead of `types.Content`.
+
+**ADK Callback Architecture**:
+
+- `before_agent_callback`: Skips entire agent execution, returns `types.Content` (final output).
+- `before_model_callback`: Skips only LLM call, returns `LlmResponse` (tool calls follow).
+
+**Solution Applied**: Changed all callback returns to `types.Content`.
+
+```python
+from google.genai import types
+
+# WRONG for before_agent_callback
+return LlmResponse(content=types.Content(...))
+
+# CORRECT for before_agent_callback
+return types.Content(role="model", parts=[types.Part(text=response_text)])
+```
+
+**Key Learning**: This is critical. The callback type determines the return type:
+
+- `before_agent_callback` → `types.Content` (ends conversation turn).
+- `before_model_callback` → `LlmResponse` (continues with tools).
+
+---
+
+### Issue 7: Specialist Response Parsing
+
+**Symptom**: Code crashed with `'str' object has no attribute 'get'`.
+
+**Root Cause**: Assumed specialist always returned dict, but sometimes returns JSON string.
+
+**Solution Applied**: Added type checking before parsing.
+
+```python
+import json
+
+response_text = None
+
+if isinstance(specialist_result, str):
+    try:
+        result_dict = json.loads(specialist_result)
+        response_text = result_dict.get("response")
+    except (json.JSONDecodeError, TypeError):
+        # Not JSON or malformed JSON; treat as plain text
+        response_text = specialist_result
+elif isinstance(specialist_result, dict):
+    response_text = specialist_result.get("response")
+
+if not response_text:
+    response_text = str(specialist_result)
+```
+
+**Key Learning**: Tool results can be strings (JSON) or dicts depending on ADK version/configuration. Always check type before calling methods.
+
+---
+
+### Issue 8: Raw Response in UI
+
+**Symptom**: User saw raw dict: `{'grade': 'ASG', 'step': 1, 'base_salary_gross': '$213,655'...}`.
+
+**Root Cause**: Specialist was not including `response` field with formatted markdown. Instruction contract was ambiguous.
+
+**Solution Applied**: Clarified specialist output contract to explicitly require formatted responses.
+
+```js
+{
+  "status": "ok",
+  "response": "**ASG Step 1 Salary...**\n\n- Gross Salary: ...",
+  "data": { /* structured fields */ },
+  "entities": { /* extracted entities */ }
+}
+```
+
+**Key Learning**: Specialist instructions must explicitly state that **both** `response` (formatted) and `data` (raw) should be returned. The callback extracts `response` for display, `data` for coordinator register.
+
+---
+
+## Part 3: Architecture Decisions
+
+### Why This Architecture Works
+
+1. **Stateless Specialists**: Each specialist receives complete context in every request.
+   - No session state accumulation.
+   - Predictable behavior.
+   - Easy to test and debug.
+
+2. **Explicit Tool Invocation**: Specialists are `AgentTool`s, not sub-agents.
+   - Clear control flow.
+   - Coordinator has full visibility.
+   - No implicit agent routing.
+
+3. **JSON-Based Communication**: Specialists return structured JSON.
+   - Machine-readable (`data` field).
+   - Human-readable (`response` field).
+   - Coordinator can validate and transform.
+
+4. **`before_agent_callback` for Routing**: Intercepts before agent even runs.
+   - Fastest path (no LLM for routed queries).
+   - Returns `types.Content` directly.
+   - Coordinator is deterministic (not LLM-based).
+
+---
+
+## Part 4: SOP - Standard Operating Procedure
+
+### Phase 1: Define Specialist Instructions (Must Complete FIRST)
+
+- Create `[specialist]_specialist_stateless.md` in `instructions/` folder.
+- Define **INPUT CONTRACT** with:
+  - `user_query` (string).
+  - `context` object with `intent`, `entities`, `entity_conf`, `provenance`.
+- Define **TOOL PLANNING RULES** with:
+  - Validation logic for required fields.
+  - Tool call sequence.
+  - Error handling (`needs_fields`, error statuses).
+- Define **OUTPUT CONTRACT** with:
+  - Success: `{status: "ok", response: "...", data: {...}, entities: {...}}`.
+  - Missing fields: `{status: "needs_fields", ...}`.
+  - Error: `{status: "error", ...}`.
+  - **CRITICAL**: Include both `response` (formatted) and `data` (raw).
+- Define **RESPONSE FORMAT** with:
+  - Markdown-formatted output examples (no tables).
+  - Mobile-friendly format (use lists, not complex formatting).
+- Define **CRITICAL GUARDRAILS** with:
+  - Domain-specific rules.
+  - Common misconceptions to correct.
+
+### Phase 2: Create Specialist Agent and Tool Wrapper
+
+- Create specialist `Agent` instance.
+- Wrap as `AgentTool` with `skip_summarization=True`.
+- Add to main agent's `tools` list that the coordinator can use.
+
+### Phase 3: Implement Coordinator Callback
+
+Use this template and adjust for your project:
+
+```python
+import asyncio
+import json
+import logging
+from typing import Optional
+
+from google.adk.tools import AgentTool
+from google.adk.tools.tool_context import ToolContext
+from google.genai import types
+
+logger = logging.getLogger(__name__)
+
+
+def build_specialist_request(payload: dict) -> str:
+    system_message = build_specialist_system_message(payload)
+    user_query = payload["user_query"]
+
+    parts = [
+        system_message,
+        "",
+        "---",
+        "",
+        f"User's original query: {user_query}",
+    ]
+    return "\n".join(parts)
+
+
+def smart_coordinator_before_agent_callback(
+    agent: "Agent",
+    user_query: str,
+    callback_context: "CallbackContext",
+) -> Optional[types.Content]:
+    try:
+        # Step 1: Get routing decision from coordinator
+        coordinator = get_coordinator_from_session(callback_context)
+        decision = coordinator.route(user_query)
+
+        if decision.action == RoutingAction.ROUTE:
+            tool_name = decision.agent
+            payload = decision.payload
+
+            # Step 2: Find specialist tool
+            specialist_tool = None
+            main_agent = (
+                callback_context.agent
+                if hasattr(callback_context, "agent")
+                else agent
+            )
+
+            if hasattr(main_agent, "tools") and main_agent.tools:
+                for tool in main_agent.tools:
+                    if (
+                        isinstance(tool, AgentTool)
+                        and hasattr(tool, "agent")
+                        and tool.agent.name == tool_name
+                    ):
+                        specialist_tool = tool
+                        break
+
+            if specialist_tool is None:
+                error_content = types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text=f"Error: Could not find specialist agent '{tool_name}'"
+                        )
+                    ],
+                )
+                return error_content
+
+            try:
+                # Step 3: Build specialist request
+                specialist_request = build_specialist_request(payload)
+                specialist_args = {"request": specialist_request}
+
+                # Step 4: Create ToolContext (CRITICAL - use _invocation_context)
+                tool_ctx = ToolContext(
+                    invocation_context=callback_context._invocation_context
+                )
+
+                # Step 5: Invoke specialist (CRITICAL - handle nested event loops)
+                try:
+                    loop = asyncio.get_running_loop()
+                    import nest_asyncio
+
+                    nest_asyncio.apply()
+                    specialist_result = asyncio.run(
+                        specialist_tool.run_async(
+                            args=specialist_args,
+                            tool_context=tool_ctx,
+                        )
+                    )
+                except RuntimeError:
+                    # No running loop; safe to call asyncio.run directly
+                    specialist_result = asyncio.run(
+                        specialist_tool.run_async(
+                            args=specialist_args,
+                            tool_context=tool_ctx,
+                        )
+                    )
+
+                # Step 6: Extract formatted response
+                response_text: Optional[str] = None
+
+                if isinstance(specialist_result, str):
+                    try:
+                        result_dict = json.loads(specialist_result)
+                        response_text = result_dict.get("response")
+                    except (json.JSONDecodeError, TypeError):
+                        response_text = specialist_result
+                elif isinstance(specialist_result, dict):
+                    response_text = specialist_result.get("response")
+
+                if not response_text:
+                    response_text = str(specialist_result)
+
+                # Step 7: Return as types.Content (CRITICAL - not LlmResponse)
+                logger.info(
+                    "[coordinator] Specialist %s returned response", tool_name
+                )
+                final_part = types.Part(text=response_text)
+                return types.Content(role="model", parts=[final_part])
+
+            except Exception as e:
+                logger.error(
+                    "[coordinator] Error invoking specialist tool: %s",
+                    e,
+                    exc_info=True,
+                )
+                error_content = types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text=f"Error processing your request: {str(e)}"
+                        )
+                    ],
+                )
+                return error_content
+
+        elif decision.action in (
+            RoutingAction.CLARIFY_INTENT,
+            RoutingAction.CLARIFY_FIELDS,
+        ):
+            prompt = decision.clarification_prompt or "Can you clarify your query?"
+            options = ", ".join(decision.clarification_options or [])
+            text_part = types.Part(
+                text=f"{prompt}\n\nOptions: {options}"
+            )
+            content = types.Content(role="model", parts=[text_part])
+            return content
+
+        elif decision.action == RoutingAction.FALLBACK_TO_LLM:
+            # Returning None lets the main agent proceed normally
+            return None
+
+        else:
+            return None
+
+    except Exception as e:
+        logger.error(
+            "[coordinator] Error in routing: %s",
+            e,
+            exc_info=True,
+        )
+        return None
+```
+
+### Phase 4: Testing and Validation
+
+- **Unit test**: Call `coordinator.route()` with sample queries.
+- **Integration test**: Test specialist tool directly with `AgentTool`.
+- **End-to-end test**: Test via `before_agent_callback` in full agent.
+- **Response format test**: Verify `response` field is formatted markdown.
+- **Error handling test**: Test with missing fields, low confidence scores.
+- **Load test**: Test with multiple concurrent requests (stateless property).
+
+---
+
+## Part 5: Common Mistakes to Avoid
+
+### Mistake 1: Using `run()` Instead of `run_async()`
+
+```python
+# WRONG
+result = specialist_tool.run(args=specialist_args)
+
+# CORRECT
+result = asyncio.run(
+    specialist_tool.run_async(args=specialist_args, tool_context=tool_ctx)
+)
+```
+
+### Mistake 2: Missing `ToolContext` Parameter
+
+```python
+# WRONG
+specialist_result = asyncio.run(
+    specialist_tool.run_async(args=specialist_args)
+)
+
+# CORRECT
+tool_ctx = ToolContext(
+    invocation_context=callback_context._invocation_context
+)
+specialist_result = asyncio.run(
+    specialist_tool.run_async(args=specialist_args, tool_context=tool_ctx)
+)
+```
+
+### Mistake 3: Not Handling Nested Event Loops
+
+```python
+# WRONG - Will crash if callback runs in event loop
+specialist_result = asyncio.run(specialist_tool.run_async(...))
+
+# CORRECT
+try:
+    loop = asyncio.get_running_loop()
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    specialist_result = asyncio.run(
+        specialist_tool.run_async(...)
+    )
+except RuntimeError:
+    specialist_result = asyncio.run(
+        specialist_tool.run_async(...)
+    )
+```
+
+### Mistake 4: Returning `LlmResponse` from `before_agent_callback`
+
+```python
+# WRONG - Will not display in UI
+return LlmResponse(content=types.Content(...))
+
+# CORRECT
+return types.Content(
+    role="model",
+    parts=[types.Part(text=response_text)],
+)
+```
+
+### Mistake 5: Assuming Specialist Returns Dict
+
+```python
+# WRONG - Crashes if specialist returns JSON string
+response_text = specialist_result.get("response")
+
+# CORRECT
+response_text = None
+
+if isinstance(specialist_result, str):
+    try:
+        result_dict = json.loads(specialist_result)
+        response_text = result_dict.get("response")
+    except (json.JSONDecodeError, TypeError):
+        response_text = specialist_result
+elif isinstance(specialist_result, dict):
+    response_text = specialist_result.get("response")
+```
+
+### Mistake 6: Ambiguous Specialist Output Contract
+
+```js
+// WRONG - No formatted response included
+{"status": "ok", "data": { /* ... */ }, "entities": { /* ... */ }}
+
+// CORRECT - Includes both formatted and raw
+{
+  "status": "ok",
+  "response": "**Formatted markdown text...**",
+  "data": { /* structured data */ },
+  "entities": { /* extracted entities */ }
+}
+```
+
+### Mistake 7: Putting Formatting Logic in Callback
+
+```python
+# WRONG - Callback should not format
+if isinstance(data, dict):
+    lines = ["**Title:**"]
+    for key, value in data.items():
+        lines.append(f"- {key}: {value}")
+    final_response = "\n".join(lines)
+
+# CORRECT - Let specialist format
+response_text = result_dict.get("response")
+```
+
+### Mistake 8: Not Importing Required Modules
+
+```python
+# WRONG - Missing imports cause runtime errors
+
+# CORRECT
+import asyncio
+import json
+from google.adk.tools import AgentTool
+from google.adk.tools.tool_context import ToolContext
+from google.adk.models import LlmResponse
+from google.genai import types
+```
+
+### Mistake 9: Import Chain Failures
+
+```python
+# WRONG - Direct imports in modules that might be imported differently
+from coordinator_config import CoordinatorConfig
+
+# CORRECT - Use three-tier fallback
+try:
+    from .coordinator_config import CoordinatorConfig
+except ImportError:
+    try:
+        from coordinator_config import CoordinatorConfig
+    except ImportError:
+        import importlib.util
+        import os
+
+        spec = importlib.util.spec_from_file_location(
+            "coordinator_config",
+            os.path.join(os.path.dirname(__file__), "coordinator_config.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        CoordinatorConfig = module.CoordinatorConfig
+```
+
+### Mistake 10: Not Making Specialists Stateless
+
+```python
+# WRONG - Stores state between calls
+class SalarySpecialist(Agent):
+    def __init__(self):
+        self.cache = {}
+        self.history = []
+
+# CORRECT - No state in specialist
+class SalarySpecialist(Agent):
+    # Every request receives complete context
+    # No session variables
+    # No caching
+    pass
+```
+
+---
+
+## Part 6: Quick Reference Checklist
+
+### Before Launching Hub-and-Spoke System
+
+- All specialist instructions have INPUT/OUTPUT contracts defined.
+- All specialists return both `response` and `data` fields.
+- Callback uses `types.Content` (not `LlmResponse`).
+- Callback handles both `str` and `dict` specialist results.
+- Event loop nesting handled with `nest_asyncio`.
+- `ToolContext` created with `_invocation_context`.
+- All modules use three-tier import fallbacks.
+- No formatting logic in callback (all in specialists).
+- All required imports are present.
+- Specialists are completely stateless.
+- Test: Single query routes to correct specialist.
+- Test: Formatted response appears in UI.
+- Test: Multiple concurrent queries work correctly.
+- Test: Error handling for invalid inputs.
+
+---
+
+## Part 7: References
+
+### Key Files
+
+- `agent.py` – Main hub agent with `before_agent_callback`.
+- `coordinator.py` – Routing logic.
+- `instructions/salary_specialist_stateless.md` – Example specialist contract.
+- `HUB_AND_SPOKE_SOP.md` – Source SOP in Markdown.
+
+### ADK Documentation Concepts
+
+- **Agent**: Conversational agent with LLM.
+- **AgentTool**: Wraps agent as a tool for another agent.
+- **before_agent_callback**: Hook before agent runs (return `types.Content`).
+- **before_model_callback**: Hook before LLM runs (return `LlmResponse`).
+- **ToolContext**: Contains invocation context for tool execution.
+
+### External Libraries Used
+
+- `nest_asyncio`: Allows nested event loops in callbacks.
+- `importlib.util`: Dynamic module loading for robust imports.
+
+---
+
+## Conclusion
+
+The Hub-and-Spoke architecture with SmartCoordinator is fully functional when:
+
+1. ADK callback semantics are respected (correct return types).
+2. Async context handling is robust (nested event loops allowed).
+3. Specialist contracts have clear input/output specifications.
+4. Specialists are stateless and receive complete context per request.
+5. Imports are resilient across different packaging/import contexts.
+
+Use this SOP as a template for implementing similar agent routing systems in ADK.
+```

@@ -17,15 +17,17 @@
             "group": "Getting started",
             "pages": [
               "index",
-              "quickstart",
-              "development"
+              "quickstart"
+              
             ]
           },
           {
-            "group": "Customization",
+            "group": "Developer essentials",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "essentials/salary-cache",
+              "essentials/spacy",
+              "essentials/n+1-query",
+              "essentials/hub-and-spoke"
             ]
           },
           {

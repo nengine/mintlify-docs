@@ -1,0 +1,519 @@
+---
+title: "Salary Caching"
+description: "Documentation of HR salary data schemas and cache implementation strategies"
+---
+
+**Date**: November 6, 2025
+**Data Source**: HR Supabase (rails schema)
+**Database**: unpolicy.db (SQLite)
+**Purpose**: Document actual data schemas for cache implementation
+
+---
+
+## Executive Summary
+
+Analyzed all 5 salary tables migrated from HR Supabase. Key findings:
+
+- **DSA Rates**: Country to multiple areas (1-35 per country), keyed by country plus area
+- **MSA Rates**: Country to single location per country (1:1 relationship), keyed by country plus location
+- **PA Rates**: One multiplier per duty station (composite key: duty_station plus asof_date)
+- **Salary Scales**: 4 category versions (Professional, Field Service, General Service, National Officer)
+- **Salary Steps**: 922 rows across 26 grades with 5 remuneration types
+
+---
+
+## 1. DSA Rates Table (1,000 rows)
+
+### Schema
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| id | INTEGER | Primary key |
+| country_name | TEXT | Country name (primary lookup) |
+| area | TEXT | Area/city within country (secondary lookup) |
+| usd_amount | DECIMAL(10,2) | Daily rate in USD |
+| currency | TEXT | Local currency code |
+| local_amount1 | DECIMAL(10,2) | Amount in primary local currency |
+| local_amount2 | DECIMAL(10,2) | Amount in secondary local currency (if applicable) |
+| room_percentage | DECIMAL(5,2) | Accommodation percentage of total |
+| dsa_eff_date | DATE | Effective date of this rate |
+| finalization_date | DATE | When rate was finalized |
+| ds_seq_no | TEXT | Duty station sequence number |
+| season_tag | TEXT | Seasonal variation tag (summer/winter) |
+| window_tag | TEXT | Time window indicator |
+| created_at | DATETIME(6) | Record creation timestamp |
+| updated_at | DATETIME(6) | Last update timestamp |
+| metadata_json | TEXT | Additional metadata |
+
+### Data Distribution
+
+**Top 15 Countries by Number of Areas**:
+
+| Country | Areas | Min Rate | Max Rate | Avg Rate |
+|---------|-------|----------|----------|----------|
+| Indonesia | 35 | $114 | $580 | $347 |
+| Mexico | 34 | $141 | $494 | $318 |
+| Colombia | 27 | $93 | $414 | $254 |
+| Algeria | 22 | $104 | $474 | $289 |
+| Brazil | 22 | $139 | $322 | $230 |
+| Egypt | 22 | $196 | $610 | $403 |
+| Madagascar | 22 | $80 | $408 | $244 |
+| China | 21 | $170 | $451 | $310 |
+| Albania | 19 | $108 | $466 | $287 |
+| Japan | 19 | $206 | $640 | $423 |
+| Congo, Dem. Rep. | 18 | $141 | $483 | $312 |
+| Dominican Republic | 18 | $73 | $465 | $269 |
+| India | 18 | $154 | $570 | $362 |
+| Cambodia | 17 | $63 | $650 | $357 |
+| Lebanon | 17 | $204 | $408 | $306 |
+
+### Key Characteristics
+
+**Multiple Areas per Country**: Most countries have 1-35 different areas/cities with distinct DSA rates
+- Example: Indonesia has 35 areas (Jakarta, Surabaya, Bandung, etc.) with rates from $114-$580
+- Example: Egypt has 22 areas with rates from $196-$610
+
+**Seasonal/Temporal Variation**: Some areas may have different rates for different time periods
+- season_tag indicates seasonal variations (summer, winter)
+- window_tag may indicate different time windows
+- dsa_eff_date tracks effective date of the rate
+
+**Currency Conversion**: Provides both USD and local currency amounts
+- All lookups likely use USD amount as standard
+- Local amounts provided for reference/local payment processing
+
+**Latest Data**: All rates effective as of September 15, 2025
+
+### Lookup Strategy for Cache
+
+```python
+# Primary lookup: country plus area to USD rate
+dsa_cache = {
+    "Indonesia": {
+        "Jakarta": {"usd_amount": 580, "currency": "IDR", ...},
+        "Surabaya": {"usd_amount": 450, "currency": "IDR", ...},
+        # ... 33 more areas
+    },
+    "Egypt": {
+        "Cairo": {"usd_amount": 610, "currency": "EGP", ...},
+        # ... 21 more areas
+    },
+    # ... remaining countries
+}
+
+# Access pattern:
+rate = dsa_cache["Egypt"]["Cairo"]["usd_amount"]  # Returns 610
+```
+
+### Sample Areas by Country
+
+**Indonesia** (35 areas):
+- Jakarta, Surabaya, Bandung, Medan, Semarang, Yogyakarta, Palembang, Makassar, Banjarmasin, etc.
+
+**Mexico** (34 areas):
+- Mexico City, Guadalajara, Monterrey, Cancun, Playa del Carmen, Los Cabos, etc.
+
+**Colombia** (27 areas):
+- Bogota, Medellin, Cali, Barranquilla, Santa Marta, Cartagena, etc.
+
+---
+
+## 2. MSA Rates Table (39 rows)
+
+### Schema
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| id | INTEGER | Primary key |
+| country | TEXT | Country name (primary lookup) |
+| location | TEXT | Specific location/mission site (secondary lookup) |
+| first_30_total | DECIMAL(10,2) | Total allowance for first 30 days |
+| first_30_accom | DECIMAL(10,2) | Accommodation component (first 30 days) |
+| first_30_meals | DECIMAL(10,2) | Meals component (first 30 days) |
+| first_30_misc | DECIMAL(10,2) | Miscellaneous component (first 30 days) |
+| after_30_total | DECIMAL(10,2) | Total allowance after 30 days |
+| after_30_accom | DECIMAL(10,2) | Accommodation component (after 30 days) |
+| after_30_meals | DECIMAL(10,2) | Meals component (after 30 days) |
+| after_30_misc | DECIMAL(10,2) | Miscellaneous component (after 30 days) |
+| eff_year | INTEGER | Effective year (all 2025) |
+| created_at | DATETIME(6) | Record creation timestamp |
+| updated_at | DATETIME(6) | Last update timestamp |
+| metadata_json | TEXT | Additional metadata |
+
+### Data Distribution
+
+**39 Hardship Locations in 36 Countries**:
+
+| Country | Location | First 30 Days | After 30 Days | Difference |
+|---------|----------|---------------|---------------|-----------|
+| Afghanistan | Kabul | $163 | $76 | $87 |
+| Algeria | Algiers | $260 | $121 | $139 |
+| Burundi | Bujumbura | $273 | $95 | $178 |
+| Central African Rep. | Bangui | $212 | $154 | $58 |
+| Colombia | Bogota | $121 | $94 | $27 |
+| Cyprus | Nicosia | $225 | $106 | $119 |
+| DRC | Kinshasa | $231 | $145 | $86 |
+| Dominican Republic | Santo Domingo | $243 | $114 | $129 |
+| Egypt | Cairo | $305 | $128 | $177 |
+| Haiti | Port-au-Prince | $246 | $145 | $101 |
+| India | New Delhi | $269 | $130 | $139 |
+| Iraq | Baghdad | $278 | $95 | $183 |
+| Iran | Tehran | $177 | $77 | $100 |
+| Israel | Jerusalem | $300 | $153 | $147 |
+| Israel | Tel Aviv | $392 | $183 | $209 |
+| Israel | Tiberias | $314 | $161 | $153 |
+| Jordan | Amman | $242 | $117 | $125 |
+| Kenya | Nairobi | $267 | $112 | $155 |
+| Kuwait | Kuwait City | $319 | $136 | $183 |
+| Lebanon | Greater Beirut | $232 | $147 | $85 |
+| Libya | Tripoli | $216 | $82 | $134 |
+| North Macedonia | Skopje | $194 | $108 | $86 |
+| Occupied Syrian Golan | Occupied Syrian Golan | $236 | $169 | $67 |
+| Pakistan | Islamabad | $167 | $80 | $87 |
+| Rwanda | Kigali | $251 | $105 | $146 |
+| Senegal | Dakar | $249 | $126 | $123 |
+| Serbia | Pristina (Kosovo) | $161 | $122 | $39 |
+| Sierra Leone | Freetown | $243 | $138 | $105 |
+| Somalia | Mogadishu | $209 | $89 | $120 |
+| South Africa | Pretoria | $165 | $72 | $93 |
+| South Sudan | Juba | $128 | $97 | $31 |
+| Sudan | Khartoum | $208 | $190 | $18 |
+| Tunisia | Tunis | $200 | $90 | $110 |
+| Uganda | Entebbe | $232 | $106 | $126 |
+| Uganda | Kampala | $252 | $113 | $139 |
+| UAE | Abu Dhabi | $417 | $225 | $192 |
+| Western Sahara | Laayoune | $134 | $112 | $22 |
+| Yemen | Sanaa | $278 | $96 | $182 |
+
+### Key Characteristics
+
+**One Location per Country (mostly)**: Simple 1:1 relationship
+- Most countries have only 1 entry (1 hardship location)
+- Exceptions: Israel (3 locations), Afghanistan (2 with typo "Kabulx"), Uganda (2 locations)
+
+**Two-Tier Allowance Structure**: Different rates for first 30 days vs. after
+- First 30 days: Higher allowance (transition period)
+- After 30 days: Lower allowance (settled period)
+- Difference typically 25-50% reduction
+
+**Component Breakdown**: Rates split into accommodation, meals, and miscellaneous
+- first_30_accom plus first_30_meals plus first_30_misc equals first_30_total
+- Same logic for after_30
+
+**All Effective Year 2025**: Current rates for hardship missions
+
+### Lookup Strategy for Cache
+
+```python
+# Primary lookup: country plus location to allowance rates
+msa_cache = {
+    "Afghanistan": {
+        "Kabul": {
+            "first_30": {"total": 163, "accom": ..., "meals": ..., "misc": ...},
+            "after_30": {"total": 76, "accom": ..., "meals": ..., "misc": ...},
+            "eff_year": 2025
+        }
+    },
+    "Israel": {
+        "Jerusalem": {...},
+        "Tel Aviv": {...},
+        "Tiberias": {...}
+    },
+    # ... remaining countries
+}
+
+# Access pattern:
+rate = msa_cache["Israel"]["Tel Aviv"]["first_30"]["total"]  # Returns 392
+```
+
+### Special Cases
+
+**Duplicate/Typo**: Afghanistan has "Kabul" and "Kabulx" (likely typo, both same rates)
+
+**Multi-Location Countries**:
+- Israel: 3 entries (Jerusalem, Tel Aviv, Tiberias)
+- Uganda: 2 entries (Entebbe, Kampala)
+- Afghanistan: 2 entries (Kabul, Kabulx)
+
+---
+
+## 3. PA Rates Table (225 rows)
+
+### Schema
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| id | INTEGER | Primary key |
+| duty_station | TEXT | Duty station name (primary lookup) |
+| multiplier | DECIMAL | PA multiplier as decimal (e.g., 1.0 = 100%) |
+| asof_date | DATE | Effective date of this rate |
+| created_at | DATETIME(6) | Record creation timestamp |
+| updated_at | DATETIME(6) | Last update timestamp |
+
+### Data Distribution
+
+**225 Duty Stations Worldwide**:
+- All rates as of October 1, 2025
+- One multiplier per duty station (per date)
+- Multipliers represent Post Adjustment percentage
+
+**PA Multiplier Range**:
+- **Lowest**: Damascus (1.00 = 100% or 0%)
+- **Highest**: Hong Kong (99.40 = 9,940%)
+- **Mean**: approximately 40-50% average adjustment
+
+**Sample Multipliers**:
+| Duty Station | Multiplier | Adjustment |
+|--------------|-----------|-----------|
+| Hong Kong | 99.40 | 9,940% |
+| Singapore | 70.10 | 7,010% |
+| Copenhagen | 77.90 | 7,790% |
+| London | 78.00 | 7,800% |
+| Geneva | 88.70 | 8,870% |
+| New York | 75.50 | 7,550% |
+| Tokyo | 50.20 | 5,020% |
+| Bangkok | 37.20 | 3,720% |
+| Lagos | 39.00 | 3,900% |
+
+### Lookup Strategy for Cache
+
+```python
+# Primary lookup: duty_station to multiplier
+pa_cache = {
+    "Geneva": {"multiplier": 88.70, "asof_date": "2025-10-01"},
+    "Hong Kong": {"multiplier": 99.40, "asof_date": "2025-10-01"},
+    "Bangkok": {"multiplier": 37.20, "asof_date": "2025-10-01"},
+    # ... 222 more duty stations
+}
+
+# Access pattern:
+rate = pa_cache["Bangkok"]["multiplier"]  # Returns 37.20
+```
+
+---
+
+## 4. Salary Scale Versions Table (4 rows)
+
+### Schema
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| id | INTEGER | Primary key |
+| category | TEXT | Staff category (Professional, Field Service, etc.) |
+| scale_name | TEXT | Human-readable name |
+| effective_date | DATE | When this version becomes effective |
+| duty_station | TEXT | Applies globally (Global) |
+| country | TEXT | Country (null for global) |
+| currency | TEXT | Currency (USD) |
+| workweek_hours | INTEGER | Standard workweek hours |
+| notes | TEXT | Additional notes |
+
+### Versions
+
+| Category | Scale Name | Effective Date | Status |
+|----------|-----------|----------------|--------|
+| Professional_and_higher | Professional and higher | 2025-01-01 | Current |
+| Field_Service | Field Service | 2023-01-01 | Previous |
+| General_Service | General Service | 2024-11-01 | Current |
+| National_Officer | National Officer | 2023-02-01 | Previous |
+
+### Lookup Strategy for Cache
+
+```python
+# Primary lookup: category to version
+salary_scale_cache = {
+    "Professional_and_higher": {
+        "id": 2,
+        "scale_name": "Professional and higher",
+        "effective_date": "2025-01-01",
+        "currency": "USD"
+    },
+    "Field_Service": {...},
+    "General_Service": {...},
+    "National_Officer": {...}
+}
+
+# Access pattern:
+version = salary_scale_cache["Professional_and_higher"]["id"]
+```
+
+---
+
+## 5. Salary Steps Table (922 rows)
+
+### Schema
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| id | INTEGER | Primary key |
+| salary_scale_version_id | INTEGER | Foreign key to salary_scale_versions |
+| level | TEXT | Staff grade (P-3, D-1, FS-4, G-5, NO-A, etc.) |
+| step | INTEGER | Step within grade (1-26) |
+| rem_type | TEXT | Remuneration type (Gross, Net, NPC, etc.) |
+| amount | DECIMAL(12,2) | Salary amount |
+| created_at | DATETIME(6) | Record creation timestamp |
+| updated_at | DATETIME(6) | Last update timestamp |
+
+### Data Distribution
+
+**26 Staff Grades**:
+
+| Category | Grades |
+|----------|--------|
+| Professional & Higher | ASG, D-1, D-2, P-1, P-2, P-3, P-4, P-5, USG |
+| Field Service | FS-1, FS-2, FS-3, FS-4, FS-5, FS-6, FS-7 |
+| General Service | G-1, G-2, G-3, G-4, G-5, G-6, G-7 |
+| National Officer | NO-A, NO-B, NO-C, NO-D |
+
+**5 Remuneration Types**:
+1. **Gross**: Total gross salary
+2. **Gross_Pensionable**: Gross minus non-pensionable components
+3. **Total_Net**: Net after all deductions
+4. **Net_Pensionable**: Net pensionable amount
+5. **NPC**: Non-Pensionable Components
+
+**Steps per Grade**: 1-26 steps depending on grade level
+
+### Sample Salary Amounts (P-3)
+
+| Step | Gross | Gross_Pensionable | Total_Net | Net_Pensionable |
+|------|-------|------------------|-----------|-----------------|
+| 1 | $87,779 | $84,778 | $70,212 | $67,213 |
+| 2 | $89,345 | $86,344 | $71,398 | $68,398 |
+| 5 | $96,754 | $93,753 | $77,033 | $74,033 |
+| 10 | $108,653 | $105,653 | $85,557 | $82,557 |
+
+### Lookup Strategy for Cache
+
+```python
+# Primary lookup: version_id plus level plus step to salary amounts
+salary_cache = {
+    2: {  # Professional_and_higher version_id
+        "P-3": {
+            1: {"Gross": 87779, "Total_Net": 70212, ...},
+            2: {"Gross": 89345, "Total_Net": 71398, ...},
+            5: {"Gross": 96754, "Total_Net": 77033, ...},
+            10: {"Gross": 108653, "Total_Net": 85557, ...},
+            # ... steps 11-26
+        },
+        "D-1": {...},
+        # ... other grades
+    }
+}
+
+# Access pattern:
+amount = salary_cache[2]["P-3"][5]["Gross"]  # Returns 96754
+```
+
+---
+
+## Cache Design Recommendations
+
+### Memory Structure
+
+```python
+# Unified cache structure for all 5 tables
+salary_cache = {
+    "scale_versions": {
+        "Professional_and_higher": {...},
+        "Field_Service": {...},
+        # ...
+    },
+    "salary_steps": {
+        <version_id>: {
+            <grade>: {
+                <step>: {
+                    <rem_type>: <amount>,
+                    # ...
+                }
+            }
+        }
+    },
+    "pa_rates": {
+        <duty_station>: {"multiplier": <value>, "asof_date": <date>},
+        # ...
+    },
+    "dsa_rates": {
+        <country>: {
+            <area>: {
+                "usd_amount": <value>,
+                "currency": <code>,
+                # ... other fields
+            }
+        }
+    },
+    "msa_rates": {
+        <country>: {
+            <location>: {
+                "first_30": {"total": <value>, "accom": <v>, ...},
+                "after_30": {"total": <value>, "accom": <v>, ...},
+            }
+        }
+    }
+}
+```
+
+### Lookup Patterns
+
+**Salary Query** (O(1) lookup):
+```python
+def get_salary(version_id, grade, step, rem_type):
+    return salary_cache["salary_steps"][version_id][grade][step][rem_type]
+```
+
+**PA Query** (O(1) lookup):
+```python
+def get_pa_rate(duty_station):
+    return salary_cache["pa_rates"][duty_station]["multiplier"]
+```
+
+**DSA Query** (O(1) lookup):
+```python
+def get_dsa_rate(country, area):
+    return salary_cache["dsa_rates"][country][area]["usd_amount"]
+```
+
+**MSA Query** (O(1) lookup):
+```python
+def get_msa_rate(country, location, days_elapsed):
+    period = "first_30" if days_elapsed <= 30 else "after_30"
+    return salary_cache["msa_rates"][country][location][period]["total"]
+```
+
+---
+
+## Total Memory Footprint
+
+| Table | Rows | Est. Size | Cache Overhead |
+|-------|------|-----------|----------------|
+| salary_scale_versions | 4 | less than 1 KB | approximately 5 KB |
+| salary_steps | 922 | approximately 100 KB | approximately 500 KB |
+| pa_rates | 225 | approximately 20 KB | approximately 100 KB |
+| dsa_rates | 1,000 | approximately 150 KB | approximately 500 KB |
+| msa_rates | 39 | approximately 8 KB | approximately 50 KB |
+| **TOTAL** | **2,190** | **approximately 280 KB** | **approximately 1.2 MB** |
+
+**Estimated Total**: 1-2 MB in memory (negligible for modern servers)
+
+---
+
+## Phase 1 Implementation Checklist
+
+Using this schema analysis:
+
+- [ ] Create cache/salary_cache.py with SalaryCache class
+- [ ] Implement load_from_sqlite() to read from unpolicy.db
+- [ ] Build nested dict structure as documented above
+- [ ] Implement O(1) lookup methods:
+  - [ ] get_salary_amount(version_id, grade, step, rem_type)
+  - [ ] get_pa_rate(duty_station)
+  - [ ] get_dsa_rate(country, area)
+  - [ ] get_msa_rate(country, location, days_elapsed)
+- [ ] Add fallback handling for missing countries/locations
+- [ ] Test all lookup patterns against actual data
+- [ ] Measure cache load time and memory usage
+- [ ] Integrate into tools.py to replace Supabase queries
+
+---
+
+**Status**: Ready for Phase 1 implementation with clear lookup strategies and memory structure.

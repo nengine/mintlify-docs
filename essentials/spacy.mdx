@@ -1,0 +1,812 @@
+---
+title: "UN Policy NLP"
+description: "Complete guide to using the UN HR entity extraction package with spaCy"
+---
+
+Complete guide to using the UN HR entity extraction package.
+
+## Table of Contents
+
+1. [Getting Started](#getting-started)
+2. [Basic Usage](#basic-usage)
+3. [Understanding the Output](#understanding-the-output)
+4. [Advanced Features](#advanced-features)
+5. [Use Case Examples](#use-case-examples)
+6. [Intent Classification](#intent-classification)
+7. [Handling Ambiguities](#handling-ambiguities)
+8. [Tips and Tricks](#tips-and-tricks)
+9. [Troubleshooting](#troubleshooting)
+
+---
+
+## Getting Started
+
+### Installation
+
+The package is located at: `C:\Users\aungh\workspace\python\un_policy_nlp`
+
+Ensure you have the required dependencies:
+```bash
+pip install spacy
+python -m spacy download en_core_web_sm
+```
+
+### Quick Import
+
+```python
+# Most common usage
+from un.policy.hr import extract
+
+# Advanced usage (if you need components)
+from un.policy.hr.nlp.pipeline import extract
+from un.policy.hr.nlp.rules.post_process import post_process_spacy_entities
+```
+
+---
+
+## Basic Usage
+
+### Simplest Example
+
+```python
+from un.policy.hr import extract
+
+result = extract("What is the R&R policy for a P4 in UNMISS?")
+print(result)
+```
+
+Output:
+```python
+{
+    'grade': 'P-4',
+    'step': '1',
+    'staff_category': 'P',
+    'post_grade': 'P',
+    'post_type': 'International',
+    'un_org': 'UNMISS',
+    'un_org_type': 'pk_missions',
+    'hr_policy_term': 'Rest and Recuperation',
+    'leave_type': 'r&r',
+    'duty_station': None,
+    'duty_station_id': None,
+    'country': None,
+    'destination': None,
+    'benefit_type': None,
+    'dsa_query': False,
+    'ambiguous_terms': [],
+    'warnings': [],
+    'errors': []
+}
+```
+
+### Accessing Specific Fields
+
+```python
+result = extract("P-3 salary in Geneva")
+
+# Get individual fields
+grade = result['grade']        # 'P-3'
+step = result['step']          # '1'
+category = result['staff_category']  # 'P'
+location = result['duty_station']    # None (without TSV)
+
+# Check for warnings
+if result['warnings']:
+    for warning in result['warnings']:
+        print(f"Warning: {warning}")
+```
+
+---
+
+## Understanding the Output
+
+### Output Fields
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `intent` | str or None | Detected query intent (NEW) | 'salary', 'query', or None |
+| `grade` | str or None | UN staff grade, normalized with hyphens | 'P-4', 'FS-3', 'ASG' |
+| `step` | str or None | Career step within grade | '1', '5', '15' |
+| `staff_category` | str or None | Broad employment classification | 'P', 'FS', 'G', 'NO', 'L', 'S' |
+| `post_grade` | str or None | Specific post grade level | 'P', 'D', 'ASG', 'USG', 'FS', 'G', 'NO', or None |
+| `post_type` | str or None | Employment type classification | 'International', 'Local', or None |
+| `un_org` | str or None | UN organization acronym | 'UNMISS', 'UNHQ', 'UNDP' |
+| `un_org_type` | str or None | Organization classification | 'pk_missions', 'funds_programmes', 'specialized_agencies' |
+| `job_function` | str or None | Job title/position (NEW) | 'Information Technology Officer', 'HR Officer' |
+| `appointment_type` | str or None | Employment contract type (NEW) | 'Fixed Term', 'Temporary', 'Permanent', 'Continuing' |
+| `duty_station` | str or None | Where person works | 'New York', 'Geneva', 'Bangkok' |
+| `duty_station_id` | str or None | Location ID from TSV | '311', '254', '318' |
+| `country` | str or None | Country detected | 'United States', 'Switzerland' |
+| `destination` | str or None | Where person is traveling to | 'Bangkok', 'Nairobi' |
+| `hr_policy_term` | str or None | HR policy (canonical form) | 'Rest and Recuperation', 'Daily Subsistence Allowance' |
+| `benefit_type` | str or None | Benefit classification | 'education grant', 'post adjustment', 'health insurance' |
+| `leave_type` | str or None | Leave type | 'annual', 'sick', 'home', 'parental', 'r&r' |
+| `dsa_query` | bool | Is this a DSA (daily subsistence) query? | True, False |
+| `ambiguous_terms` | list | Terms requiring context | See "Handling Ambiguities" |
+| `warnings` | list | Non-critical issues | 'Grade P-6 is invalid... Auto-correcting to P-5.' |
+| `errors` | list | Critical errors | Usually empty |
+
+### Grade Formats
+
+The package normalizes grades to standard format:
+
+| Input | Output | Category |
+|-------|--------|----------|
+| P4, P-4, P/4 | P-4 | Professional (P-1 to P-5) |
+| D1, D-1, D/1 | D-1 | Director (D-1 to D-2) |
+| GS3, G3, GL2 | G-3 | General Service |
+| FS1, FS-1 | FS-1 | Field Service |
+| NOA, NO-A, NO/A | NO-A | National Officer |
+| ASG, ASG-1 | ASG | Assistant Secretary General (always step 1) |
+| USG, USG-1 | USG | Under Secretary General (always step 1) |
+
+---
+
+## Advanced Features
+
+### 1. Using Intent Classification (NEW)
+
+Intent classification automatically detects what type of query the user is asking:
+
+```python
+from un.policy.hr import extract
+
+# Salary intent - asking about compensation/salary scales
+result = extract("What is the salary of P4?")
+print(result['intent'])         # 'salary'
+
+# Query intent - asking for statistical/analytical data
+result = extract("How many P4 officers in MONUSCO?")
+print(result['intent'])         # 'query'
+
+# Ambiguous - not enough context
+result = extract("P4 in Geneva")
+print(result['intent'])         # None
+```
+
+#### Intent Types
+
+| Intent | Meaning | Example Query |
+|--------|---------|---------------|
+| 'salary' | Asking about compensation/salary scales | "What is the salary for P4?" |
+| 'query' | Statistical/analytical database questions | "How many P4 officers?" |
+| None | Ambiguous or insufficient context | "P4 in Geneva" |
+
+#### Auto-Detection vs. Explicit Intent
+
+```python
+from un.policy.hr import extract
+
+# Auto-detect (recommended)
+result = extract("What is the salary of P4?")
+print(result['intent'])  # 'salary' (auto-detected)
+
+# Explicit override (if needed)
+result = extract("P4 in Geneva", intent="query")
+print(result['intent'])  # 'query' (explicitly set)
+```
+
+#### Getting Confidence Scores
+
+```python
+from un.policy.hr.nlp.rules.intent import classify_intent_with_confidence
+
+intent, confidence, scores = classify_intent_with_confidence("How many P4 officers?")
+print(f"Intent: {intent}")        # 'query'
+print(f"Confidence: {confidence:.1%}")  # '100.0%'
+print(f"Scores: {scores}")        # {'salary': 0, 'query': 2, 'ratio': 2.0}
+```
+
+#### Understanding Intent Keywords
+
+**Salary Intent Keywords** (24 total):
+- Direct compensation: salary, wage, pay, compensation, earning, income
+- Scale-related: salary scale, salary range, salary band, salary for, salary of
+- Amount questions: how much, what is the salary, what is the pay, earning for
+- Comparisons: salary comparison, salary difference, salary increase
+
+**Query Intent Keywords** (23 total):
+- Counting: how many, count, total, number of, percentage
+- Statistics: distribution, vacancy, average, median, trend
+- Database: list all, query, search, filter
+
+#### Important Note on Scope
+
+**Important**: The salary intent is specifically for **compensation/salary scale questions**, NOT policy questions:
+- Salary Intent: "What is the salary for P4?"
+- NOT Salary Intent: "What is the R and R policy?" (policy question - future intent)
+- NOT Salary Intent: "DSA for Bangkok?" (allowance question - future intent)
+
+### 2. Extracting Raw Results Without Post-Processing
+
+If you need raw extraction before post-processing:
+
+```python
+from un.policy.hr.nlp.spacy_runtime import get_nlp
+from un.policy.hr.nlp.extractors.grade import extract_grade_and_step
+from un.policy.hr.nlp.extractors.orgs import extract_un_org
+from un.policy.hr.nlp.rules.post_process import post_process_spacy_entities
+
+# Get raw spaCy doc
+nlp = get_nlp()
+text = "P-4 in UNMISS"
+doc = nlp(text)
+
+# Extract individual components
+grade_result = extract_grade_and_step(text, doc)
+org_result = extract_un_org(doc)
+
+# Manually combine
+raw_result = {
+    'grade': grade_result['grade'],
+    'step': grade_result['step'],
+    'un_org': org_result['un_org'],
+    # ... other fields
+}
+
+# Now apply post-processing
+final_result = post_process_spacy_entities(raw_result, text, intent="salary")
+```
+
+### 3. Working With Grade Normalization
+
+```python
+from un.policy.hr.nlp.rules.grade_normalization import normalize_grade, validate_and_correct_grade
+
+# Just normalize
+grade = normalize_grade("P4")  # Returns 'P-4'
+
+# Normalize and validate
+normalized = normalize_grade("P6")
+corrected, warning = validate_and_correct_grade(normalized)
+print(corrected)  # 'P-5' (auto-corrected)
+print(warning)    # 'Grade P-6 is invalid (P level only goes up to P-5). Auto-correcting to P-5.'
+```
+
+### 4. Working With Step Conversion
+
+```python
+from un.policy.hr.nlp.rules.step_rules import roman_to_arabic, validate_and_correct_step
+
+# Convert Roman numerals
+step = roman_to_arabic("VII")  # Returns '7'
+
+# Validate steps
+corrected, warning = validate_and_correct_step("0")
+print(corrected)  # '1' (auto-corrected)
+print(warning)    # 'Step 0 is invalid (minimum is 1). Setting to step 1.'
+```
+
+### 5. Data Lookups
+
+```python
+from un.policy.hr.nlp.data.duty_stations import get_duty_stations, get_country_lookup
+from un.policy.hr.nlp.data.airports import get_airport_to_city
+from un.policy.hr.nlp.data.un_orgs import get_un_org_categories
+
+# Get all duty stations
+stations = get_duty_stations()
+
+# Get country mappings
+countries = get_country_lookup()
+print(countries.get('switzerland'))  # ('Switzerland', '254')
+
+# Get airport mappings
+airports = get_airport_to_city()
+print(airports.get('bkk'))  # ('Bangkok', '318')
+
+# Get UN org categories
+orgs = get_un_org_categories()
+print(orgs.get('unmiss'))  # ('UNMISS', 'pk_missions')
+```
+
+---
+
+## Use Case Examples
+
+### Example 1: Salary Query with Auto-Detected Intent
+
+```python
+from un.policy.hr import extract
+
+query = "What is the salary for a P-3 step 5?"
+result = extract(query)
+
+print(f"Intent: {result['intent']}")          # salary (auto-detected)
+print(f"Grade: {result['grade']}")            # P-3
+print(f"Step: {result['step']}")              # 5
+print(f"Category: {result['staff_category']}")    # P
+print(f"Post Grade: {result['post_grade']}")  # P
+print(f"Post Type: {result['post_type']}")    # International
+```
+
+### Example 2: Query Intent with Auto-Detected Intent
+
+```python
+query = "How many P-4 IT officers are in MONUSCO?"
+result = extract(query)
+
+print(f"Intent: {result['intent']}")          # query (auto-detected)
+print(f"Grade: {result['grade']}")            # P-4
+print(f"Job Function: {result['job_function']}")  # Information Technology Officer
+print(f"Organization: {result['un_org']}")    # MONUSCO
+print(f"Org Type: {result['un_org_type']}")   # pk_missions
+```
+
+### Example 3: Job Function with Appointment Type
+
+```python
+query = "P-4 fixed-term IT Officer at UNMISS in Geneva"
+result = extract(query)
+
+print(f"Intent: {result['intent']}")          # salary (auto-detected from "P-4")
+print(f"Grade: {result['grade']}")            # P-4
+print(f"Job Function: {result['job_function']}")  # Information Technology Officer
+print(f"Appointment Type: {result['appointment_type']}")  # Fixed Term
+print(f"Organization: {result['un_org']}")    # UNMISS
+print(f"Location: {result['duty_station']}")  # Geneva
+```
+
+### Example 4: Ambiguous Query (No Clear Intent)
+
+```python
+query = "P4 in Geneva"
+result = extract(query)
+
+print(f"Intent: {result['intent']}")          # None (ambiguous)
+print(f"Grade: {result['grade']}")            # P-4
+print(f"Duty Station: {result['duty_station']}")  # Geneva
+print(f"Note: Intent is None because no salary or query keywords found")
+```
+
+### Example 5: Complex Multi-Entity Query
+
+```python
+query = "P-5/3 permanent HR Officer at UNHQ"
+result = extract(query)
+
+print(f"Intent: {result['intent']}")          # None (no salary/query keywords)
+print(f"Grade: {result['grade']}")            # P-5
+print(f"Step: {result['step']}")              # 3
+print(f"Job Function: {result['job_function']}")  # HR Officer
+print(f"Appointment Type: {result['appointment_type']}")  # Permanent
+print(f"Organization: {result['un_org']}")    # UNHQ
+print(f"Org Type: {result['un_org_type']}")   # unhq
+print(f"Location (auto-mapped): {result['duty_station']}")  # New York
+```
+
+### Example 6: Batch Processing with Intent
+
+```python
+queries = [
+    "What is the salary for P4?",
+    "How many G-5 officers in UNDP?",
+    "D-1 temporary appointment",
+]
+
+for query in queries:
+    result = extract(query)
+    print(f"Query: {query}")
+    print(f"  Intent: {result['intent']}")
+    print(f"  Grade: {result['grade']}")
+    print(f"  Job: {result['job_function']}")
+    print()
+```
+
+---
+
+## Intent Classification
+
+### What is Intent Classification?
+
+Intent classification automatically determines what the user is asking about. It helps the system understand whether a query is about **salary/compensation** or **statistical/analytical data**.
+
+### When Intent is Auto-Detected
+
+Intent is **automatically detected** for all queries. You don't need to provide it unless you want to override the auto-detection.
+
+```python
+from un.policy.hr import extract
+
+# Intent is auto-detected
+result = extract("What is the salary of P4?")
+print(result['intent'])  # Automatically detected as 'salary'
+
+result = extract("How many P4 officers?")
+print(result['intent'])  # Automatically detected as 'query'
+```
+
+### Intent Values
+
+| Intent | Meaning | Example Query | Detection Keywords |
+|--------|---------|---------------|-------------------|
+| 'salary' | Compensation/salary scale questions | "What is the salary for P4?" | salary, wage, pay, how much |
+| 'query' | Statistical/analytical database questions | "How many P4 officers?" | how many, count, total, percentage |
+| None | Ambiguous - not enough context | "P4 in Geneva" | (no strong keywords) |
+
+### Overriding Auto-Detection (Advanced)
+
+If needed, you can explicitly set the intent:
+
+```python
+# Override auto-detection
+result = extract("P4 in Geneva", intent="query")
+print(result['intent'])  # 'query' (explicitly set, not auto-detected)
+```
+
+### Intent Detection Examples
+
+```python
+# Salary Intent Examples
+extract("What is the salary of P4?")        # intent: 'salary'
+extract("How much does a D-1 earn?")        # intent: 'salary'
+extract("P4 salary scale")                  # intent: 'salary'
+extract("Salary comparison P4 vs D-1")      # intent: 'salary'
+
+# Query Intent Examples
+extract("How many P4 officers in MONUSCO?") # intent: 'query'
+extract("Count of D-1 staff at UNHQ")       # intent: 'query'
+extract("Vacancy rate in MINUSCA")          # intent: 'query'
+extract("Distribution of staff by grade")   # intent: 'query'
+
+# Ambiguous Examples
+extract("P4 in Geneva")                     # intent: None
+extract("Tell me about P4")                 # intent: None
+extract("UNMISS")                           # intent: None
+```
+
+### Important: Scope of Salary Intent
+
+**Salary intent is specifically for compensation questions**, NOT policy questions:
+- Salary Intent (salary keyword detected):
+  - "What is the salary for P4?"
+  - "How much does D-1 earn?"
+  - "P4 salary scale"
+
+- NOT Salary Intent (policy/benefit questions - future scope):
+  - "What is the R and R policy?" (HR policy, not salary)
+  - "DSA for Bangkok?" (allowance policy, not salary)
+  - "Education grant amount?" (benefit policy, not salary)
+
+---
+
+## Handling Ambiguities
+
+### MSA (Mission Subsistence Allowance) Disambiguation
+
+MSA is ambiguous - it can mean:
+- **Mission Subsistence Allowance** (travel context)
+- **Minimum Salary Allowance** (salary context)
+
+```python
+result = extract("What is the MSA?")
+
+# The result includes ambiguity information
+if result['ambiguous_terms']:
+    for ambig in result['ambiguous_terms']:
+        print(f"Term: {ambig['term']}")              # 'MSA'
+        print(f"Detected as: {ambig['detected_as']}")  # 'Mission Subsistence Allowance'
+        print(f"Alternatives: {ambig['alternatives']}")  # ['Minimum Salary Allowance']
+        print(f"Hint: {ambig['resolution_hint']}")   # Use intent to disambiguate
+```
+
+### Resolving MSA Ambiguity
+
+```python
+# Travel context - MSA = Mission Subsistence Allowance
+result = extract("MSA rates for BKK", intent="travel")
+# result['hr_policy_term'] = 'Mission Subsistence Allowance'
+
+# Salary context - Check context keywords
+query_lower = "What is the minimum salary allowance?"
+if "minimum" in query_lower and "salary" in query_lower:
+    # User is asking about Minimum Salary Allowance
+    pass
+```
+
+### Checking Warnings
+
+Always check for warnings - they indicate potential issues:
+
+```python
+result = extract("P-6 officer")
+
+if result['warnings']:
+    for warning in result['warnings']:
+        print(f"Warning: {warning}")
+        # Example: "Grade P-6 is invalid (P level only goes up to P-5). Auto-correcting to P-5."
+```
+
+---
+
+## Tips and Tricks
+
+### Tip 1: Understanding Staff Classification Fields
+
+The system provides three complementary fields for staff classification:
+
+```python
+result = extract("D-1 benefits")
+
+# staff_category: Broad classification
+print(result['staff_category'])  # 'P' (Professional staff)
+
+# post_grade: Specific post grade level
+print(result['post_grade'])      # 'D' (Director-level post)
+
+# post_type: Employment type classification
+print(result['post_type'])       # 'International'
+
+# Use these for different purposes:
+if result['staff_category'] == 'P':
+    print("This is professional staff")
+
+if result['post_grade'] == 'D':
+    print("This is director-level post")
+
+if result['post_type'] == 'International':
+    print("Apply international salary scale")
+
+# Another example with General Service
+result = extract("G-5 officer")
+print(result['staff_category'])  # 'G' (General Service staff)
+print(result['post_grade'])      # 'G' (General Service post grade)
+print(result['post_type'])       # 'Local' (Local staff)
+```
+
+**Classification Hierarchy:**
+- `staff_category`: P (Professional), FS (Field Service), G (General Service), NO (National Officer), L (Language), S (Security)
+- `post_grade`: P, D, ASG, USG, FS, G, NO (specific post level) or None
+- `post_type`: International (P, D, ASG, USG, FS) or Local (G, NO) or None (L, S)
+
+### Tip 2: Use DSA Query Flag
+
+Instead of parsing hr_policy_term, use the DSA flag:
+
+```python
+result = extract("DSA for BKK")
+
+# Good: Use the flag
+if result['dsa_query']:
+    print("This is a DSA query")
+
+# Less ideal: Parse the term
+if result['hr_policy_term'] and 'Daily Subsistence' in result['hr_policy_term']:
+    print("This is a DSA query")
+```
+
+### Tip 3: Batch Processing
+
+```python
+from un.policy.hr import extract
+
+queries = [
+    "P-3 in Geneva",
+    "R and R policy in UNMISS",
+    "DSA for BKK",
+]
+
+results = [extract(q) for q in queries]
+
+for query, result in zip(queries, results):
+    print(f"{query}: grade={result['grade']}, un_org={result['un_org']}")
+```
+
+### Tip 4: Handling Missing TSV File
+
+Without the TSV file, duty stations aren't matched from text:
+
+```python
+# This won't find 'Geneva' without TSV
+result = extract("P-3 in Geneva")
+print(result['duty_station'])  # None
+
+# But this WILL work (IATA code)
+result = extract("DSA for GVA")
+print(result['duty_station'])  # 'Geneva' (from airport mapping)
+
+# And this WILL work (org-based mapping)
+result = extract("P-3 at UNOG")
+print(result['duty_station'])  # 'Geneva' (UNOG mapped to Geneva)
+```
+
+### Tip 5: Case Insensitivity
+
+The system is case-insensitive:
+
+```python
+extract("P4")      # Same as
+extract("p4")      # Same as
+extract("P-4")     # All return grade='P-4'
+
+extract("UNMISS")  # Same as
+extract("unmiss")  # Both work
+```
+
+---
+
+## Troubleshooting
+
+### Issue 1: Grade Not Detected
+
+**Problem:**
+```python
+result = extract("Grade is P4")
+print(result['grade'])  # None
+```
+
+**Solution:** The pattern only matches grades with specific formats. Try:
+```python
+extract("P4")           # Works
+extract("P-4")          # Works
+extract("P-4/2")        # Works (includes step)
+extract("My grade P4")  # Works
+extract("Grade: P4")    # Works
+
+extract("Grade is P4")  # Might not work - "Grade is" breaks pattern
+```
+
+**Workaround:** Use simpler sentences or provide grade separately.
+
+### Issue 2: Step Not Detected Without Grade
+
+**Problem:**
+```python
+result = extract("What about step 3?")
+print(result['step'])  # None
+```
+
+**Reason:** Step is only extracted if a grade is also present, or if the pattern "step X" is found.
+
+**Solution:**
+```python
+extract("step 3")                       # Works
+extract("step III")                     # Works (Roman numeral)
+extract("P-3 at step 5")                # Works
+```
+
+### Issue 3: Location Not Found
+
+**Problem:**
+```python
+result = extract("P-3 in Geneva")
+print(result['duty_station'])  # None
+```
+
+**Reason:** TSV file not provided. The system has airport codes and org mappings, but not a full duty station list.
+
+**Solution:**
+1. Add TSV file at: `un/policy/hr/nlp/data/files/location_country.tsv`
+2. Or use IATA airport codes:
+   ```python
+   extract("P-3 in GVA")  # GVA = Geneva airport code
+   ```
+3. Or use organization names:
+   ```python
+   extract("P-3 at UNOG")  # UNOG maps to Geneva
+   ```
+
+### Issue 4: HR Term Not Recognized
+
+**Problem:**
+```python
+result = extract("Annual vacation")
+print(result['leave_type'])  # None
+```
+
+**Reason:** The pattern looks for "annual leave", not "annual vacation".
+
+**Solution:**
+```python
+extract("annual leave")     # Works
+extract("AL")              # Works (acronym)
+extract("vacation")        # Works (pattern)
+extract("holidays")        # Works (pattern)
+```
+
+### Issue 5: Warnings Appearing
+
+**Problem:**
+```python
+result = extract("P-7")
+print(result['warnings'])
+# ['Grade P-7 is invalid (P level only goes up to P-5). Auto-correcting to P-5.']
+```
+
+**Solution:** This is expected behavior. The system auto-corrects invalid grades. Check warnings if you want to inform users:
+
+```python
+result = extract("P-7")
+if result['warnings']:
+    print("Grade was auto-corrected. Original input was invalid.")
+```
+
+### Issue 6: spaCy Model Not Found
+
+**Problem:**
+```
+ModuleNotFoundError: No module named 'spacy'
+```
+
+**Solution:**
+```bash
+pip install spacy
+python -m spacy download en_core_web_sm
+```
+
+### Issue 7: Unexpected Behavior with Acronyms
+
+**Problem:**
+```python
+result = extract("R and R policy")
+print(result['hr_policy_term'])  # 'Rest and Recuperation'
+```
+
+**Why it works:** The system recognizes R and R, RNR, and RR as rest and recuperation.
+
+**Other acronyms:**
+```python
+extract("DSA")    # 'Daily Subsistence Allowance'
+extract("dsa")    # 'Daily Subsistence Allowance' (case-insensitive)
+extract("PA")     # 'Post Adjustment'
+extract("AL")     # 'Annual Leave'
+extract("SL")     # 'Sick Leave'
+extract("HL")     # 'Home Leave'
+extract("EG")     # 'Education Grant'
+```
+
+---
+
+## Quick Reference
+
+### Most Common Queries
+
+```python
+from un.policy.hr import extract
+
+# Salary query
+result = extract("P-3 salary in Geneva", intent="salary")
+# Check: grade, step, staff_category, duty_station
+
+# DSA query
+result = extract("DSA for BKK", intent="travel")
+# Check: dsa_query, destination, duty_station_id
+
+# Leave query
+result = extract("How much annual leave?", intent="leave")
+# Check: leave_type
+
+# Benefits query
+result = extract("Education grant eligibility?", intent="benefits")
+# Check: benefit_type
+
+# Policy query
+result = extract("R and R for P-4 in UNMISS")
+# Check: grade, step, un_org, leave_type, hr_policy_term
+```
+
+### Field Checklist
+
+When processing results, check these fields in order:
+
+1. **Warnings and Errors**: `result['warnings']`, `result['errors']`
+2. **Grade and Step**: `result['grade']`, `result['step']`, `result['staff_category']`
+3. **Organization**: `result['un_org']`, `result['un_org_type']`
+4. **Location**: `result['destination']` or `result['duty_station']`
+5. **Policy**: `result['hr_policy_term']`, `result['leave_type']`, `result['benefit_type']`
+6. **Flags**: `result['dsa_query']`
+7. **Ambiguities**: `result['ambiguous_terms']`
+
+---
+
+## Need More Help?
+
+- **README.md**: Architecture and design documentation
+- **IMPLEMENTATION_SUMMARY.md**: Implementation details
+- **Source code**: Check docstrings in module files
+- **Test examples**: See `un/policy/hr/nlp/pipeline.py` main section
+
+---
+
+**Last Updated:** 2025-11-11
+**Version:** 1.0
