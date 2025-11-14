@@ -21,6 +21,26 @@
               
             ]
           },
+          {  
+            "group": "Policy",  
+            "pages": [  
+              {  
+                "group": "Staff Rules",  
+                "pages": [  
+                  "policy/un-staff-rules/index",  
+                  "policy/un-staff-rules/article-1",  
+                  "policy/un-staff-rules/article-2",  
+                  "policy/un-staff-rules/article-3-part-1",  
+                  "policy/un-staff-rules/article-3-part-2",  
+                  "policy/un-staff-rules/article-4",  
+                  "policy/un-staff-rules/article-5",  
+                  "policy/un-staff-rules/article-6",  
+                  "policy/un-staff-rules/article-7",
+                  "policy/un-staff-rules/article-9"
+                ]  
+              }  
+            ]  
+          },
           {
             "group": "Developer essentials",
             "pages": [
