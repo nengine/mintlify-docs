@@ -1,11 +1,11 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "oneun.ai Documentation",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#4472C4",
+    "light": "#5B7FD8",
+    "dark": "#2E5090"
   },
   "favicon": "/favicon.svg",
   "navigation": {

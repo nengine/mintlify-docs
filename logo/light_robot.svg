@@ -5,6 +5,6 @@
 <path d="M3 12C3 12 6 15 12 15C18 15 21 12 21 12" stroke="#4472C4" stroke-width="1.2" fill="none"/>
 <ellipse cx="12" cy="12" rx="2.5" ry="7" stroke="#4472C4" stroke-width="1.2" fill="none"/>
 <!-- Text: OneUN.ai Docs -->
-<text x="32" y="17" font-family="system-ui, -apple-system, sans-serif" font-size="17" font-weight="700" fill="#FFFFFF">OneUN.ai</text>
-<text x="115" y="17" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="400" fill="#9F9FA9">Docs</text>
+<text x="32" y="17" font-family="Roboto Mono, monospace" font-size="17" font-weight="700" fill="#09090B">OneUN.ai</text>
+<text x="115" y="17" font-family="Roboto Mono, monospace" font-size="16" font-weight="400" fill="#52525C">Docs</text>
 </svg>
