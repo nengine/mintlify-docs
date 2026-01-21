@@ -22,7 +22,7 @@
             ]
           },
           {  
-            "group": "Policy",  
+            "group": "Policy X",  
             "pages": [  
               {  
                 "group": "Staff Rules",  
@@ -40,6 +40,70 @@
                 ]  
               }  
             ]  
+          },
+          {
+            "group": "Policy",
+            "pages": [
+              {
+                "group": "Staff Rules 2024",
+                "pages": [
+                  "docs/staff-rules-2024/introduction",
+                  {
+                    "group": "Articles (with Rules/Chapters)",
+                    "pages": [
+                      
+                      
+                      {
+                        "group": "Article III",
+                        "pages": [
+                          "docs/staff-rules-2024/articles/article-iii",
+                          "docs/staff-rules-2024/chapters/chapter-iii"
+                        ]
+                      },
+                      {
+                        "group": "Article IV",
+                        "pages": [
+                          "docs/staff-rules-2024/articles/article-iv",
+                          "docs/staff-rules-2024/chapters/chapter-iv"
+                        ]
+                      },
+                      {
+                        "group": "Article VII",
+                        "pages": [
+                          "docs/staff-rules-2024/articles/article-vii",
+                          "docs/staff-rules-2024/chapters/chapter-vii"
+                        ]
+                      },
+                      {
+                        "group": "Article IX",
+                        "pages": [
+                          "docs/staff-rules-2024/articles/article-ix",
+                          "docs/staff-rules-2024/chapters/chapter-ix"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "group": "Annexes",
+                    "pages": [
+                      "docs/staff-rules-2024/annexes/annex-i",
+                      "docs/staff-rules-2024/annexes/annex-ii",
+                      "docs/staff-rules-2024/annexes/annex-iii",
+                      "docs/staff-rules-2024/annexes/annex-iv"
+                    ]
+                  },
+                  {
+                    "group": "Appendices",
+                    "pages": [
+                      "docs/staff-rules-2024/appendices/appendix-a",
+                      "docs/staff-rules-2024/appendices/appendix-b",
+                      "docs/staff-rules-2024/appendices/appendix-c",
+                      "docs/staff-rules-2024/appendices/appendix-d"
+                    ]
+                  }
+                ]
+              }
+            ]
           },
           {
             "group": "Developer essentials",
