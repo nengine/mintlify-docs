@@ -47,40 +47,95 @@
               {
                 "group": "Staff Rules 2024",
                 "pages": [
-                  "docs/staff-rules-2024/introduction",
                   {
-                    "group": "Articles (with Rules/Chapters)",
+                    "group": "Salaries and related allowances",
                     "pages": [
-                      
-                      
-                      {
-                        "group": "Article III",
-                        "pages": [
-                          "docs/staff-rules-2024/articles/article-iii",
-                          "docs/staff-rules-2024/chapters/chapter-iii"
-                        ]
-                      },
-                      {
-                        "group": "Article IV",
-                        "pages": [
-                          "docs/staff-rules-2024/articles/article-iv",
-                          "docs/staff-rules-2024/chapters/chapter-iv"
-                        ]
-                      },
-                      {
-                        "group": "Article VII",
-                        "pages": [
-                          "docs/staff-rules-2024/articles/article-vii",
-                          "docs/staff-rules-2024/chapters/chapter-vii"
-                        ]
-                      },
-                      {
-                        "group": "Article IX",
-                        "pages": [
-                          "docs/staff-rules-2024/articles/article-ix",
-                          "docs/staff-rules-2024/chapters/chapter-ix"
-                        ]
-                      }
+                      "docs/staff-rules-2024/articles/article-iii",
+                      "docs/staff-rules-2024/chapters/chapter-iii"
+                    ]
+                  },
+                  {
+                    "group": "Attendance and leave",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-v",
+                      "docs/staff-rules-2024/chapters/chapter-v"
+                    ]
+                  },
+                  {
+                    "group": "Travel and relocation expenses",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-vii",
+                      "docs/staff-rules-2024/chapters/chapter-vii"
+                    ]
+                  },
+                  {
+                    "group": "Separation from service",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-ix",
+                      "docs/staff-rules-2024/chapters/chapter-ix"
+                    ]
+                  },
+                  {
+                    "group": "Appointments",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-ii",
+                      "docs/staff-rules-2024/chapters/chapter-ii"
+                    ]
+                  },
+                  {
+                    "group": "Scope and purpose",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-i",
+                      "docs/staff-rules-2024/chapters/chapter-i"
+                    ]
+                  },                  
+                  {
+                    "group": "Staff obligations",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-iv",
+                      "docs/staff-rules-2024/chapters/chapter-iv"
+                    ]
+                  },
+                  {
+                    "group": "Social security",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-vi",
+                      "docs/staff-rules-2024/chapters/chapter-vi"
+                    ]
+                  },
+                  {
+                    "group": "Staff relations",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-viii",
+                      "docs/staff-rules-2024/chapters/chapter-viii"
+                    ]
+                  },
+                  {
+                    "group": "Disciplinary measures",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-x",
+                      "docs/staff-rules-2024/chapters/chapter-x"
+                    ]
+                  },
+                  {
+                    "group": "Appeals",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-xi",
+                      "docs/staff-rules-2024/chapters/chapter-xi"
+                    ]
+                  },
+                  {
+                    "group": "General provisions",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-xii",
+                      "docs/staff-rules-2024/chapters/chapter-xii"                      
+                    ]
+                  },
+
+                  {
+                    "group": "Transitional measures",
+                    "pages": [                      
+                      "docs/staff-rules-2024/chapters/chapter-xiii-transitional-measures"
                     ]
                   },
                   {
