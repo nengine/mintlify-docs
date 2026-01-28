@@ -1,6 +1,6 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
+  "theme": "willow",
   "name": "oneun.ai Documentation",
   "colors": {
     "primary": "#4472C4",
@@ -44,8 +44,9 @@
           {
             "group": "Policy",
             "pages": [
+                "docs/staff-rules-2024/benefits_entitlements_eligibility",
               {
-                "group": "Staff Rules 2024",
+                "group": "Staff Rules ST/SGB/2024/1",
                 "pages": [
                   {
                     "group": "Salaries and related allowances",
@@ -76,10 +77,10 @@
                     ]
                   },
                   {
-                    "group": "Appointments",
+                    "group": "Appointments and promotions",
                     "pages": [
-                      "docs/staff-rules-2024/articles/article-ii",
-                      "docs/staff-rules-2024/chapters/chapter-ii"
+                      "docs/staff-rules-2024/articles/article-iv",
+                      "docs/staff-rules-2024/chapters/chapter-iv"
                     ]
                   },
                   {
@@ -88,7 +89,16 @@
                       "docs/staff-rules-2024/articles/article-i",
                       "docs/staff-rules-2024/chapters/chapter-i"
                     ]
-                  },                  
+                  },  
+                  {
+                    "group": "Classification of posts and staff",
+                    "pages": [
+                      "docs/staff-rules-2024/articles/article-ii",
+                      "docs/staff-rules-2024/chapters/chapter-ii"
+                    ]
+                  },  
+                  
+
                   {
                     "group": "Staff obligations",
                     "pages": [
